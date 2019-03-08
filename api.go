@@ -1,8 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"io/ioutil"
+	"mime/multipart"
+	"net/http"
+	"os"
 
 	"github.com/bndr/gopencils"
 )
@@ -271,6 +276,159 @@ func (api *API) setPagePermissions(
 		return fmt.Errorf(
 			"'true' response expected, but '%v' encountered",
 			result,
+		)
+	}
+
+	return nil
+}
+
+func (api *API) attachFiles(page *PageInfo, files []string) error {
+	result := struct {
+		Results []PageInfo `json:"results"`
+	}{}
+
+	request, err := api.rest.Res(
+		"content/"+page.ID+"/child/attachment", &result,
+	).Get()
+
+	if err != nil {
+		return err
+	}
+
+	if request.Raw.StatusCode != 200 {
+		output, _ := ioutil.ReadAll(request.Raw.Body)
+		defer request.Raw.Body.Close()
+
+		return fmt.Errorf(
+			"Confluence REST API returns unexpected non-200 HTTP status: %s, "+
+				"output: %s",
+			request.Raw.Status, output,
+		)
+	}
+
+	attachments := []string{}
+
+	for _, file := range files {
+		reattached := false
+
+		for _, attachment := range result.Results {
+			if file == attachment.Title {
+				err = api.reattachFile(attachment.ID, page, file)
+				if err != nil {
+					return err
+				}
+
+				reattached = true
+			}
+		}
+
+		if !reattached {
+			attachments = append(attachments, file)
+		}
+	}
+
+	if len(attachments) > 0 {
+		err = api.attachManyFiles(page, attachments)
+
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (api *API) reattachFile(
+	id string, page *PageInfo, attachment string,
+) error {
+	var (
+		payload = &bytes.Buffer{}
+		writer  = multipart.NewWriter(payload)
+	)
+
+	file, err := os.Open(attachment)
+	if err != nil {
+		return err
+	}
+
+	content, err := writer.CreateFormFile("file", attachment)
+	if err != nil {
+		return err
+	}
+
+	io.Copy(content, file)
+
+	writer.Close()
+
+	result := struct {
+		Results []PageInfo `json:"results"`
+	}{}
+
+	resource := api.rest.Res(
+		"content/"+page.ID+"/child/attachment/"+id+"/data", &result,
+	)
+	resource.Payload = payload
+
+	resource.Headers = http.Header{}
+	resource.SetHeader("Content-Type", writer.FormDataContentType())
+	resource.SetHeader("X-Atlassian-Token", "no-check")
+
+	_, err = resource.Post()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (api *API) attachManyFiles(page *PageInfo, files []string) error {
+	var (
+		payload = &bytes.Buffer{}
+		writer  = multipart.NewWriter(payload)
+	)
+
+	for _, attachment := range files {
+		file, err := os.Open(attachment)
+		if err != nil {
+			return err
+		}
+
+		content, err := writer.CreateFormFile("file", attachment)
+		if err != nil {
+			return err
+		}
+
+		io.Copy(content, file)
+	}
+
+	writer.Close()
+
+	result := struct {
+		Results []PageInfo `json:"results"`
+	}{}
+
+	resource := api.rest.Res(
+		"content/"+page.ID+"/child/attachment", &result,
+	)
+
+	resource.Payload = payload
+	resource.Headers = http.Header{}
+	resource.SetHeader("Content-Type", writer.FormDataContentType())
+	resource.SetHeader("X-Atlassian-Token", "no-check")
+
+	request, err := resource.Post()
+	if err != nil {
+		return err
+	}
+
+	if request.Raw.StatusCode != 200 {
+		output, _ := ioutil.ReadAll(request.Raw.Body)
+		defer request.Raw.Body.Close()
+
+		return fmt.Errorf(
+			"Confluence REST API returns unexpected non-200 HTTP status: %s, "+
+				"output: %s",
+			request.Raw.Status, output,
 		)
 	}
 

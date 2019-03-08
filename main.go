@@ -112,6 +112,7 @@ const (
 	HeaderSpace         = `Space`
 	HeaderTitle         = `Title`
 	HeaderLayout        = `Layout`
+	HeaderAttach        = `Attach`
 )
 
 type Meta struct {
@@ -119,6 +120,7 @@ type Meta struct {
 	Space   string
 	Title   []string
 	Layout  string
+	Attach  []string
 }
 
 var (
@@ -345,6 +347,15 @@ func main() {
 	)
 	if err != nil {
 		logger.Fatal(err)
+	}
+
+	if len(meta.Attach) > 0 {
+		err = api.attachFiles(
+			target, meta.Attach,
+		)
+		if err != nil {
+			logger.Fatal(err)
+		}
 	}
 
 	if editLock {
@@ -661,6 +672,9 @@ func extractMeta(data []byte) (*Meta, error) {
 
 		case HeaderLayout:
 			meta.Layout = strings.TrimSpace(matches[2])
+
+		case HeaderAttach:
+			meta.Attach = append(meta.Attach, matches[2])
 
 		default:
 			logger.Errorf(
